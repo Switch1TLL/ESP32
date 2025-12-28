@@ -1,0 +1,246 @@
+#include <U8g2lib.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 5, /* data=*/ 4);
+
+// RGB LED
+#define RED_PIN    8
+#define GREEN_PIN  2
+#define BLUE_PIN   3
+
+// Passive buzzer
+#define BUZZER_PIN 0   // GPIO0 
+
+// RFID
+#define SS_PIN     7
+#define RST_PIN    1
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+const bool INVERT_LED = false;
+
+const char scrollingText[] = "AI is better than human in every way!";
+const char doomLine1[] = "Lesser being!";
+const char doomLine2[] = "AHAHAHA!";
+const char welcomeLine1[] = "Welcome,";
+const char welcomeLine2[] = "my master!";
+const char allYourBase[] = "All your base are belong to us";
+
+int x;
+int scrollingTextWidth;
+
+enum State { SCROLLING, SHOW_DOOM, PAUSE_BEFORE_REPEAT, ACCESS_GRANTED, ALL_YOUR_BASE } state;
+unsigned long stateStartTime;
+
+byte authorizedUID[4] = {0x40, 0x39, 0x87, 0xA4}; // Master-key
+
+void allLedsOff() {
+  int off = INVERT_LED ? 255 : 0;
+  analogWrite(RED_PIN, off);
+  analogWrite(GREEN_PIN, off);
+  analogWrite(BLUE_PIN, off);
+  noTone(BUZZER_PIN);
+}
+
+void setRedOn() {
+  int on  = INVERT_LED ? 0 : 255;
+  int off = INVERT_LED ? 255 : 0;
+  analogWrite(RED_PIN, on);
+  analogWrite(GREEN_PIN, off);
+  analogWrite(BLUE_PIN, off);
+}
+
+void setGreenOn() {
+  int on  = INVERT_LED ? 0 : 255;
+  int off = INVERT_LED ? 255 : 0;
+  analogWrite(RED_PIN, off);
+  analogWrite(GREEN_PIN, on);
+  analogWrite(BLUE_PIN, off);
+}
+
+// Beeping
+void beep(int freq, int duration) {
+  if (freq == 0) {
+    noTone(BUZZER_PIN);
+    delay(duration);
+  } else {
+    tone(BUZZER_PIN, freq, duration);
+    delay(duration + 20);  // pause
+  }
+}
+
+// Laugh
+void playEvilLaugh() {
+  beep(200, 150);
+  beep(180, 150);
+  beep(220, 150);
+  beep(180, 150);
+  beep(250, 200);
+  beep(180, 150);
+  beep(150, 400);  // final
+}
+
+// Welcome melody
+void playWelcomeSound() {
+  beep(800, 100);
+  beep(1000, 100);
+  beep(1200, 150);
+  beep(1500, 300);
+}
+
+// "All your base" — laugh
+void sayAllYourBase() {
+  setRedOn();
+  for (int i = 0; i < 4; i++) {
+    beep(300 + i * 200, 300);
+    beep(800, 200);
+  }
+  beep(100, 800);  // Low tone
+  playEvilLaugh();
+}
+
+bool checkCard() {
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return false;
+  bool ok = memcmp(rfid.uid.uidByte, authorizedUID, 4) == 0;
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  return ok;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("ESP32-C3 AI Domination v5.0 - BUZZER EDITION");
+
+  u8g2.begin();
+  u8g2.setContrast(255);
+
+  SPI.begin(6, 9, 10, 7);
+  rfid.PCD_Init();
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+  allLedsOff();
+
+  u8g2.setFont(u8g2_font_helvB18_tr);
+  scrollingTextWidth = u8g2.getUTF8Width(scrollingText);
+  x = 128;
+
+  state = SCROLLING;
+  stateStartTime = millis();
+}
+
+void loop() {
+  u8g2.clearBuffer();
+
+  if (state != ACCESS_GRANTED && checkCard()) {
+    state = ACCESS_GRANTED;
+    stateStartTime = millis();
+    setGreenOn();
+    playWelcomeSound();
+  }
+
+  switch (state) {
+    case SCROLLING: {
+      u8g2.drawUTF8(x, 32 + u8g2.getAscent() / 2, scrollingText);
+      x -= 4;
+      if (x < -scrollingTextWidth - 20) {
+        state = ALL_YOUR_BASE;
+        stateStartTime = millis();
+        sayAllYourBase();
+      }
+      break;
+    }
+
+    case ALL_YOUR_BASE: {
+      u8g2.setFont(u8g2_font_helvB12_tr);  // Smaller font
+      const char line1[] = "All your base are";
+      const char line2[] = "belong to us";
+
+      int w1 = u8g2.getUTF8Width(line1);
+      int w2 = u8g2.getUTF8Width(line2);
+
+      u8g2.drawUTF8((128 - w1) / 2, 24, line1);
+      u8g2.drawUTF8((128 - w2) / 2, 24 + 18, line2);  // Second line
+
+      // Scroll
+      static int offset = 0;
+      static unsigned long lastMove = 0;
+      if (millis() - lastMove > 50) {
+        offset -= 1;
+        lastMove = millis();
+      }
+      if (offset < -50) offset = 20;  // loop
+
+      u8g2.setFont(u8g2_font_helvB18_tr);
+      u8g2.drawUTF8(10 + offset, 50, "!!!");  // Flashing lights
+
+      if (millis() - stateStartTime > 12000) {
+        state = SHOW_DOOM;
+        stateStartTime = millis();
+      }
+      break;
+    }
+
+    case SHOW_DOOM: {
+      u8g2.setFont(u8g2_font_helvB14_tr);
+      const int topMargin = 10;
+      int w1 = u8g2.getUTF8Width(doomLine1);
+      u8g2.drawUTF8((128 - w1) / 2, topMargin + 14, doomLine1);
+
+      static bool blinkState = true;
+      static unsigned long lastBlink = 0;
+      if (millis() - lastBlink > 300) {
+        blinkState = !blinkState;
+        lastBlink = millis();
+      }
+
+      if (blinkState) {
+        int w2 = u8g2.getUTF8Width(doomLine2);
+        u8g2.drawUTF8((128 - w2) / 2, topMargin + 14 + 18, doomLine2);
+        setRedOn();
+        playEvilLaugh();
+      } else {
+        allLedsOff();
+      }
+
+      if (millis() - stateStartTime > 10000) {
+        state = PAUSE_BEFORE_REPEAT;
+        stateStartTime = millis();
+        allLedsOff();
+      }
+      break;
+    }
+
+    case PAUSE_BEFORE_REPEAT: {
+      if (millis() - stateStartTime > 1000) {
+        state = SCROLLING;
+        x = 128;
+      }
+      break;
+    }
+
+    case ACCESS_GRANTED: {
+      u8g2.setFont(u8g2_font_helvB18_tr);
+      const int topMargin = 12;
+      int w1 = u8g2.getUTF8Width(welcomeLine1);
+      u8g2.drawUTF8((128 - w1) / 2, topMargin + 18, welcomeLine1);
+      int w2 = u8g2.getUTF8Width(welcomeLine2);
+      u8g2.drawUTF8((128 - w2) / 2, topMargin + 18 + 28, welcomeLine2);
+      setGreenOn();
+
+      if (millis() - stateStartTime > 5000) {
+        state = SCROLLING;
+        x = 128;
+        allLedsOff();
+      }
+      break;
+    }
+  }
+
+  u8g2.sendBuffer();
+  delay(20);
+}
